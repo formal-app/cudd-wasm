@@ -2,11 +2,13 @@
 # Build CUDD 3.0.0 from the vendored cudd/ sources, natively and to
 # WebAssembly, with the programs that test it. cudd/ is never modified.
 #
-#   ./build.sh          both
+#   ./build.sh          all three
 #   ./build.sh native   native library (autotools, out of tree) and test programs
-#   ./build.sh wasm     WebAssembly library (emcc, no autotools) and test programs
+#   ./build.sh wasm     WebAssembly library (emcc, no autotools), the cudd module
+#                       and test programs
+#   ./build.sh ts       the TypeScript API, compiled into dist/ beside the module
 #
-# Output: build/native/{spike,hardening}, build/wasm/{spike,hardening,hardening-64mb}.{mjs,wasm}
+# Output: build/native/{spike,hardening}, build/wasm/*.{mjs,wasm}, dist/
 set -euo pipefail
 cd "$(dirname "$0")"
 target="${1:-all}"
@@ -85,13 +87,35 @@ EOF
   for f in "${lib_srcs[@]}"; do
     local o="$out/obj/$(basename "$(dirname "$f")")_$(basename "${f%.c}").o"
     objs+=("$o")
-    emcc -O3 "${INC[@]}" -c "$f" -o "$o" &
+    # DD_COUNT makes CUDD count reordering work, for Session.stats().swapSteps.
+    emcc -O3 -DDD_COUNT "${INC[@]}" -c "$f" -o "$o" &
     pids+=($!)
     if (( ${#pids[@]} >= $(nproc) )); then for p in "${pids[@]}"; do wait "$p"; done; pids=(); fi
   done
   for p in "${pids[@]}"; do wait "$p"; done
   rm -f "$out/libcudd.a"
   emar rcs "$out/libcudd.a" "${objs[@]}"
+
+  # The module Session loads: exactly the functions it calls.
+  local exports=(malloc free cw_manager_new cw_dot
+    Cudd_Quit Cudd_Ref Cudd_RecursiveDeref Cudd_CheckZeroRef
+    Cudd_ReadOne Cudd_ReadLogicZero Cudd_ReadZero Cudd_bddIthVar
+    Cudd_bddAnd Cudd_bddOr Cudd_bddXor Cudd_bddXnor Cudd_bddNand Cudd_bddNor Cudd_bddIte Cudd_bddLeq
+    Cudd_bddExistAbstract Cudd_bddUnivAbstract Cudd_bddAndAbstract Cudd_bddSwapVariables
+    Cudd_Cofactor Cudd_bddCompose Cudd_IndicesToCube
+    Cudd_bddPickOneCube Cudd_Eval Cudd_SupportIndices Cudd_CountMinterm
+    Cudd_DagSize Cudd_SharingSize Cudd_BddToAdd
+    Cudd_T Cudd_E Cudd_V Cudd_IsConstant Cudd_NodeReadIndex
+    Cudd_ReadPerm Cudd_ReadInvPerm Cudd_ReadSize Cudd_ShuffleHeap Cudd_ReduceHeap Cudd_Srandom
+    Cudd_SetTimeLimit Cudd_UnsetTimeLimit Cudd_ResetStartTime Cudd_ReadElapsedTime Cudd_ReadReorderingTime
+    Cudd_SetMaxLive Cudd_SetMaxMemory Cudd_ReadErrorCode Cudd_ClearErrorCode
+    Cudd_ReadNodeCount Cudd_ReadPeakLiveNodeCount Cudd_ReadCacheLookUps Cudd_ReadCacheHits
+    Cudd_ReadGarbageCollections Cudd_ReadReorderings Cudd_ReadSwapSteps Cudd_ReadMemoryInUse)
+  local list
+  list=$(printf '_%s,' "${exports[@]}")
+  emcc "${WASM_LINK[@]}" "$out/libcudd.a" -o "$out/cudd.mjs" \
+    -sEXPORTED_FUNCTIONS="${list%,}" \
+    -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAP32,HEAPU8
 
   emcc "${WASM_LINK[@]}" "${INC[@]}" src/spike.c "$out/libcudd.a" -o "$out/spike.mjs" \
     -sEXPORTED_FUNCTIONS=_spike_run -sEXPORTED_RUNTIME_METHODS=UTF8ToString
@@ -100,12 +124,21 @@ EOF
   # The same checks with a 64 MB ceiling, to reach out-of-memory quickly.
   emcc "${WASM_LINK[@]}" -sMAXIMUM_MEMORY=64MB "${INC[@]}" test/hardening.c "$out/libcudd.a" \
     -o "$out/hardening-64mb.mjs" -sEXPORTED_FUNCTIONS=_hardening_run -sEXPORTED_RUNTIME_METHODS=ccall
-  echo "wasm: $out/spike.mjs, $out/hardening.mjs, $out/hardening-64mb.mjs"
+  echo "wasm: $out/cudd.mjs, $out/spike.mjs, $out/hardening.mjs, $out/hardening-64mb.mjs"
+}
+
+build_ts() {
+  [ -f build/wasm/cudd.mjs ] || { echo "build/wasm/cudd.mjs is missing: run ./build.sh wasm first" >&2; exit 1; }
+  rm -rf dist
+  npx tsc -p tsconfig.json
+  cp build/wasm/cudd.mjs build/wasm/cudd.wasm src/cudd.d.mts dist/
+  echo "ts: dist/"
 }
 
 case "$target" in
   native) build_native ;;
   wasm) build_wasm ;;
-  all) build_native; build_wasm ;;
-  *) echo "usage: $0 [native|wasm]" >&2; exit 2 ;;
+  ts) build_ts ;;
+  all) build_native; build_wasm; build_ts ;;
+  *) echo "usage: $0 [native|wasm|ts]" >&2; exit 2 ;;
 esac

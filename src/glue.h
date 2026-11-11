@@ -20,4 +20,7 @@ DdManager *cw_manager_new(unsigned int nvars);
 /* CUDD's name for a Cudd_ReadErrorCode value, such as "CUDD_TIMEOUT_EXPIRED". */
 const char *cw_error_name(Cudd_ErrorType code);
 
+/* CUDD's DOT for n functions as a malloc'd string, or NULL (LIB-7). */
+char *cw_dot(DdManager *dd, int n, DdNode **f, char const *const *inames, char const *const *onames);
+
 #endif

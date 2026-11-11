@@ -1,4 +1,5 @@
 /* C glue between CUDD and the cudd-wasm API. */
+#include <stdlib.h>
 #include "glue.h"
 
 /*
@@ -41,4 +42,24 @@ const char *cw_error_name(Cudd_ErrorType code) {
     case CUDD_INTERNAL_ERROR: return "CUDD_INTERNAL_ERROR";
   }
   return "unknown";
+}
+
+/*
+ * CUDD's DOT for n functions, written to memory instead of a file (LIB-7):
+ * in WebAssembly a FILE goes through Emscripten's JavaScript file system,
+ * which is slower. inames is indexed by variable index; onames names the
+ * functions. Returns a malloc'd string the caller frees, or NULL.
+ */
+char *cw_dot(DdManager *dd, int n, DdNode **f, char const *const *inames, char const *const *onames) {
+  char *buf = NULL;
+  size_t len = 0;
+  FILE *fp = open_memstream(&buf, &len);
+  if (!fp) return NULL;
+  int ok = Cudd_DumpDot(dd, n, f, inames, onames, fp);
+  fclose(fp);
+  if (!ok) {
+    free(buf);
+    return NULL;
+  }
+  return buf;
 }
