@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { parityScript, PARITY_VARS } from "./parity-script.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm" };
@@ -79,7 +80,7 @@ before(async () => {
     }
     const file = normalize(join(root, path));
     const allowed = [join(root, "build/wasm/"), join(root, "dist/")];
-    if (!allowed.some((dir) => file.startsWith(dir))) {
+    if (!allowed.some((dir) => file.startsWith(dir)) && file !== join(root, "test/parity-script.mjs")) {
       res.writeHead(404);
       return res.end();
     }
@@ -170,7 +171,24 @@ test("Chromium, Web Worker: every Session operation works on 1,000-level diagram
   assert.equal(r.leaks, 0);
 });
 
-// ── WorkerSession (LIB-8) ───────────────────────────────────────────────────
+// ── WorkerSession (LIB-8) and Node/browser parity (LIB-9) ──────────────────
+
+test("the parity script gives byte-identical output in Node (Session) and Chromium (WorkerSession) (LIB-9, library test 7)", async () => {
+  const { Session } = await import(`${root}dist/index.js`);
+  const s = await Session.create({ vars: PARITY_VARS });
+  const node = await parityScript(s);
+  assert.equal(s.dispose(), 0);
+  const browser = await page.evaluate(async (vars) => {
+    const { WorkerSession } = await import("/dist/client.js");
+    const { parityScript } = await import("/test/parity-script.mjs");
+    const ws = await WorkerSession.create({ vars });
+    const out = await parityScript(ws);
+    return { out, leaks: await ws.dispose() };
+  }, PARITY_VARS);
+  assert.equal(browser.leaks, 0);
+  assert.ok(node.length > 10000, `the script observed enough (${node.length} bytes)`);
+  assert.equal(browser.out, node);
+});
 
 test("WorkerSession mirrors Session, and errors keep their class across the worker boundary (LIB-8)", async () => {
   const r = await page.evaluate(async () => {
