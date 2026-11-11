@@ -1,5 +1,6 @@
-// Browser smoke test: the Phase 0 harness in headless Chromium, on the main
-// thread and in a module Web Worker, gives the same results as native CUDD.
+// Browser tests in headless Chromium: the Phase 0 harness, on the main thread
+// and in a module Web Worker, gives the same results as native CUDD; and a
+// worker handles twice the recursion depth the 1,000-variable cap allows.
 // Run ./build.sh first, then: node --test test/browser.test.mjs
 // CHROMIUM_PATH selects a Chromium binary; otherwise Playwright's own is used
 // (npx playwright install chromium).
@@ -21,6 +22,9 @@ const PAGES = {
   "/worker.mjs": `import createModule from "/build/wasm/spike.mjs";
 const m = await createModule();
 postMessage(m.UTF8ToString(m._spike_run()));`,
+  "/deep-worker.mjs": `import createModule from "/build/wasm/hardening.mjs";
+const m = await createModule();
+postMessage(m.ccall("hardening_run", "string", ["string"], ["deep:1000"]));`,
 };
 
 let server, base, browser, page;
@@ -82,4 +86,22 @@ test("Chromium, Web Worker: the Phase 0 harness gives native CUDD's results", as
   assert.equal(r.results.queens.minterms, 92);
   assert.equal(r.deterministic, 1, r.nondeterministic);
   assert.deepEqual(r.results, native().results);
+});
+
+// LIB-5. Session caps a manager at 1,000 variables, so no recursion goes deeper
+// than 1,000 levels. Two 1,000-variable chains recurse through 2,000 levels;
+// a Chromium worker's stack overflows at about 2,750.
+test("Chromium, Web Worker: two 1,000-variable chains, twice the depth the cap allows, run without overflow (LIB-5)", async () => {
+  const json = await page.evaluate(() => new Promise((resolve, reject) => {
+    const w = new Worker("/deep-worker.mjs", { type: "module" });
+    w.onmessage = (e) => { resolve(e.data); w.terminate(); };
+    w.onerror = (e) => { reject(new Error(e.message)); w.terminate(); };
+  }));
+  const r = JSON.parse(json);
+  assert.equal(r.vars, 2000);
+  assert.equal(r.andOk, 1);
+  assert.equal(r.dagSize, 2001);
+  assert.equal(r.countMinterm, 1, "below 2,044 variables, Cudd_CountMinterm counts exactly");
+  assert.equal(r.apaCountIsOne, 1);
+  assert.equal(r.zeroRef, 0);
 });

@@ -46,9 +46,17 @@ build_native() {
 # Link flags shared by every WebAssembly program. Memory grows up to a 1 GB
 # ceiling, and at the ceiling malloc returns NULL instead of aborting, so CUDD
 # reports CUDD_MEMORY_OUT (LIB-3).
+#
+# STACK_SIZE (LIB-5) is twice the smallest that passes the deep test: two
+# 10,000-variable chains, their AND, Cudd_CountMinterm and Cudd_DagSize need
+# 316 KB (measured with -sSTACK_OVERFLOW_CHECK=2, in Node with a raised V8
+# stack). Below that depth, the binding limit is the JavaScript engine's own
+# call stack, which this flag does not set: a Chromium Web Worker overflows at
+# about 2,750 levels. Session therefore caps a manager at CW_MAX_VARS (1,000)
+# variables; see src/glue.h.
 WASM_LINK=(-O3 -sMODULARIZE=1 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1
   -sENVIRONMENT=web,worker,node -sFORCE_FILESYSTEM=1
-  -sMAXIMUM_MEMORY=1GB -sABORTING_MALLOC=0)
+  -sMAXIMUM_MEMORY=1GB -sABORTING_MALLOC=0 -sSTACK_SIZE=640KB)
 
 build_wasm() {
   command -v emcc >/dev/null || { echo "emcc not found: run ./bootstrap.sh, then source ~/emsdk/emsdk_env.sh" >&2; exit 1; }

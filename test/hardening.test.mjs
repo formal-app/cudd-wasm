@@ -78,3 +78,38 @@ test("wasm, 64 MB build: running out of memory returns NULL with CUDD_MEMORY_OUT
   assert.equal(r.zeroRef, 0, "no reference leaks after running out of memory");
   assert.equal(r.newManagerOk, 1, "a new manager works after Cudd_Quit");
 });
+
+// LIB-5. The deep test recurses through 20,000 variable levels. Emscripten's
+// stack (STACK_SIZE) is sized for it, but V8's own call stack runs out first
+// unless it is raised, so the WebAssembly run uses a child Node process with
+// --stack-size=4000 (4 MB, inside the usual 8 MB thread stack). Browsers do
+// not allow that, which is why Session caps a manager at 1,000 variables; the
+// browser test checks that cap's headroom in a Chromium Web Worker.
+function deepChecks(r) {
+  assert.equal(r.vars, 20000);
+  assert.equal(r.andOk, 1, "the AND of the two chains succeeds");
+  assert.equal(r.dagSize, 20001, "Cudd_DagSize: 20,000 nodes and the constant");
+  // Cudd_CountMinterm gives up (CUDD_OUT_OF_MEM, -1) above 2,043 variables,
+  // because 2^nvars no longer fits in a double; the exact count is 1.
+  assert.equal(r.countMinterm, -1);
+  assert.equal(r.apaCountIsOne, 1, "Cudd_ApaCountMinterm counts exactly 1 minterm");
+  assert.equal(r.zeroRef, 0);
+}
+
+test("native: two 10,000-variable chains, their AND, then the minterm count and size (LIB-5)", () => {
+  deepChecks(native("deep"));
+});
+
+test("wasm, Node with a 4 MB V8 stack: two 10,000-variable chains, their AND, then the minterm count and size (LIB-5)", () => {
+  const script = `const { default: c } = await import(process.argv[1]);
+const m = await c();
+console.log(m.ccall("hardening_run", "string", ["string"], [process.argv[2]]));`;
+  const out = execFileSync(process.execPath,
+    ["--stack-size=4000", "--input-type=module", "-e", script, `${root}build/wasm/hardening.mjs`, "deep"],
+    { encoding: "utf8" });
+  deepChecks(JSON.parse(out));
+});
+
+test("wasm: the Emscripten stack is 640 KB, twice the 316 KB the deep test needs (LIB-5)", async () => {
+  assert.equal((await wasm("limits")).stackKB, 640);
+});

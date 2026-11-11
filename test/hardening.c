@@ -11,6 +11,8 @@
  *            and the manager stays usable (run in the 64 MB build)
  *   maxlive  LIB-4: CUDD's own live-node ceiling stops an operation with
  *            CUDD_TOO_MANY_NODES, and the manager stays usable
+ *   deep     LIB-5: two 10,000-variable conjunction chains, their AND, then
+ *            Cudd_CountMinterm and Cudd_DagSize; the deepest recursion here
  *   limits   the WebAssembly heap ceiling and stack size this build has
  */
 #include <stdio.h>
@@ -256,6 +258,64 @@ static void scenario_maxlive(void) {
     freshOk, freshSize, cw_error_name(freshError), zeroRef);
 }
 
+/* ── LIB-5: deep diagrams ─────────────────────────────────────────────────── */
+
+#define CHAIN 10000
+static int chainLength = CHAIN;   /* "deep:N" runs chains of N variables */
+
+/* AND of variables first, first+step, ..., first+(n-1)*step. Built from the
+ * bottom up, so each AND adds one node on top and recurses one level. */
+static DdNode *chain(DdManager *dd, int first, int step, int n) {
+  DdNode *f = Cudd_ReadOne(dd);
+  Cudd_Ref(f);
+  for (int i = n - 1; i >= 0; i--) {
+    DdNode *v = Cudd_bddIthVar(dd, first + i * step);
+    Cudd_Ref(v);
+    if (!fold(dd, &f, v, Cudd_bddAnd)) return NULL;
+  }
+  return f;
+}
+
+/*
+ * The chains use interleaved variables (even and odd), so their AND recurses
+ * through all 20,000 levels, as do Cudd_DagSize and the minterm counts on the
+ * result. Cudd_CountMinterm returns CUDD_OUT_OF_MEM (-1) without recursing for
+ * more than 2,043 variables, because 2^nvars no longer fits in a double; so
+ * the count is also taken with Cudd_ApaCountMinterm, CUDD's arbitrary-precision
+ * count, which recurses through every level and must give exactly 1.
+ */
+static void scenario_deep(void) {
+  int n = chainLength, nvars = 2 * n;
+  DdManager *dd = cw_manager_new(nvars);
+  double t0 = now_ms();
+  DdNode *a = chain(dd, 0, 2, n);
+  DdNode *b = chain(dd, 1, 2, n);
+  DdNode *ab = a && b ? Cudd_bddAnd(dd, a, b) : NULL;
+  if (ab) Cudd_Ref(ab);
+  int dagSize = ab ? Cudd_DagSize(ab) : -1;
+  double minterms = ab ? Cudd_CountMinterm(dd, ab, nvars) : -2;
+  int digits = 0, apaIsOne = 0;
+  DdApaNumber count = ab ? Cudd_ApaCountMinterm(dd, ab, nvars, &digits) : NULL;
+  if (count) {
+    DdApaNumber one = Cudd_NewApaNumber(digits);
+    Cudd_ApaSetToLiteral(digits, one, 1);
+    apaIsOne = Cudd_ApaCompare(digits, count, digits, one) == 0;
+    Cudd_FreeApaNumber(one);
+    Cudd_FreeApaNumber(count);
+  }
+  double ms = now_ms() - t0;
+  if (ab) Cudd_RecursiveDeref(dd, ab);
+  if (a) Cudd_RecursiveDeref(dd, a);
+  if (b) Cudd_RecursiveDeref(dd, b);
+  int zeroRef = Cudd_CheckZeroRef(dd);
+  Cudd_Quit(dd);
+
+  snprintf(out, sizeof out,
+    "{\"scenario\":\"deep\",\"chain\":%d,\"vars\":%d,\"andOk\":%d,\"dagSize\":%d,"
+    "\"countMinterm\":%.17g,\"apaCountIsOne\":%d,\"ms\":%.1f,\"zeroRef\":%d}",
+    n, nvars, ab != NULL, dagSize, minterms, apaIsOne, ms, zeroRef);
+}
+
 /* ── The limits this build has ───────────────────────────────────────────── */
 
 static void scenario_limits(void) {
@@ -275,11 +335,18 @@ static const struct { const char *name; void (*run)(void); } SCENARIOS[] = {
   {"reorder", scenario_reorder},
   {"oom", scenario_oom},
   {"maxlive", scenario_maxlive},
+  {"deep", scenario_deep},
   {"limits", scenario_limits},
 };
 #define NSCENARIOS ((int) (sizeof SCENARIOS / sizeof SCENARIOS[0]))
 
 const char *hardening_run_named(const char *name) {
+  if (!strncmp(name, "deep:", 5)) {
+    chainLength = atoi(name + 5);
+    scenario_deep();
+    chainLength = CHAIN;
+    return out;
+  }
   for (int i = 0; i < NSCENARIOS; i++)
     if (!strcmp(SCENARIOS[i].name, name)) { SCENARIOS[i].run(); return out; }
   snprintf(out, sizeof out, "{\"error\":\"unknown scenario\"}");
