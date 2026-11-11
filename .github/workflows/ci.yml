@@ -21,10 +21,11 @@ jobs:
       - name: Install Emscripten 7.0.0
         run: ./bootstrap.sh
       - run: npm ci
-      # apt mirrors occasionally hang; fail fast instead of using up the job.
+      # Without --with-deps: that runs apt, whose mirrors sometimes fail or hang,
+      # and the runner image already has the libraries Chromium needs.
       - name: Install Chromium
         timeout-minutes: 10
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Build
         run: |
           source ~/emsdk/emsdk_env.sh
