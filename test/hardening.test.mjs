@@ -48,6 +48,20 @@ for (const [platform, run] of Object.entries(PLATFORMS)) {
   });
 }
 
+for (const [platform, run] of Object.entries(PLATFORMS)) {
+  test(`${platform}: CUDD's live-node ceiling stops an operation with CUDD_TOO_MANY_NODES (LIB-4)`, async () => {
+    const r = await run("maxlive");
+    assert.equal(r.failedNull, 1);
+    assert.equal(r.failedError, "CUDD_TOO_MANY_NODES");
+    // CUDD checks the ceiling when it allocates a block of 1,022 nodes.
+    assert.ok(r.peakLive <= r.maxLive + 1022, `stops within one node block of the limit (peak ${r.peakLive})`);
+    assert.equal(r.freshOk, 1, "after clearing, the same manager computes again");
+    assert.equal(r.freshError, "CUDD_NO_ERROR");
+    assert.equal(r.freshSize, 31);
+    assert.equal(r.zeroRef, 0);
+  });
+}
+
 test("wasm: memory grows to a 1 GB ceiling (LIB-3)", async () => {
   assert.equal((await wasm("limits")).heapMaxMB, 1024);
 });

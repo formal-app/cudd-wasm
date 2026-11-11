@@ -9,6 +9,8 @@
  *            function is unchanged
  *   oom      LIB-3: running out of memory returns NULL with CUDD_MEMORY_OUT,
  *            and the manager stays usable (run in the 64 MB build)
+ *   maxlive  LIB-4: CUDD's own live-node ceiling stops an operation with
+ *            CUDD_TOO_MANY_NODES, and the manager stays usable
  *   limits   the WebAssembly heap ceiling and stack size this build has
  */
 #include <stdio.h>
@@ -220,6 +222,40 @@ static void scenario_oom(void) {
     freshOk, freshSize, cw_error_name(freshError), zeroRef, newManagerOk);
 }
 
+/* ── LIB-4: CUDD's live-node ceiling ────────────────────────────────────── */
+
+/*
+ * Cudd_SetMaxLive is CUDD 3.0.0's own ceiling. CUDD checks it when it needs
+ * a new block of DD_MEM_CHUNK (1,022) nodes, counting live nodes only
+ * (keys - dead), so an operation stops within about one block of the limit.
+ */
+#define MAX_LIVE 10000
+
+static void scenario_maxlive(void) {
+  DdManager *dd = cw_manager_new(2 * 16);
+  Cudd_SetMaxLive(dd, MAX_LIVE);
+  DdNode *f = xy_sum(dd, 0, 16);   /* 131,071 nodes when complete */
+  int failedNull = f == NULL;
+  Cudd_ErrorType failedError = Cudd_ReadErrorCode(dd);
+  long peakLive = Cudd_ReadPeakLiveNodeCount(dd);
+  if (f) Cudd_RecursiveDeref(dd, f);
+
+  Cudd_ClearErrorCode(dd);
+  DdNode *g = xy_sum(dd, 0, 4);
+  int freshOk = g != NULL;
+  int freshSize = g ? Cudd_DagSize(g) : -1;
+  Cudd_ErrorType freshError = Cudd_ReadErrorCode(dd);
+  if (g) Cudd_RecursiveDeref(dd, g);
+  int zeroRef = Cudd_CheckZeroRef(dd);
+  Cudd_Quit(dd);
+
+  snprintf(out, sizeof out,
+    "{\"scenario\":\"maxlive\",\"maxLive\":%d,\"failedNull\":%d,\"failedError\":\"%s\","
+    "\"peakLive\":%ld,\"freshOk\":%d,\"freshSize\":%d,\"freshError\":\"%s\",\"zeroRef\":%d}",
+    MAX_LIVE, failedNull, cw_error_name(failedError), peakLive,
+    freshOk, freshSize, cw_error_name(freshError), zeroRef);
+}
+
 /* ── The limits this build has ───────────────────────────────────────────── */
 
 static void scenario_limits(void) {
@@ -238,6 +274,7 @@ static const struct { const char *name; void (*run)(void); } SCENARIOS[] = {
   {"time", scenario_time},
   {"reorder", scenario_reorder},
   {"oom", scenario_oom},
+  {"maxlive", scenario_maxlive},
   {"limits", scenario_limits},
 };
 #define NSCENARIOS ((int) (sizeof SCENARIOS / sizeof SCENARIOS[0]))
