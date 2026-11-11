@@ -1,0 +1,14 @@
+{
+  "name": "@formal-app/cudd-wasm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CUDD 3.0.0 compiled to WebAssembly",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.59.1"
+  }
+}

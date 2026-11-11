@@ -1,0 +1,85 @@
+// Browser smoke test: the Phase 0 harness in headless Chromium, on the main
+// thread and in a module Web Worker, gives the same results as native CUDD.
+// Run ./build.sh first, then: node --test test/browser.test.mjs
+// CHROMIUM_PATH selects a Chromium binary; otherwise Playwright's own is used
+// (npx playwright install chromium).
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const TYPES = { ".html": "text/html", ".mjs": "text/javascript", ".wasm": "application/wasm" };
+
+// The page and the worker script are served from memory; everything else from build/wasm.
+const PAGES = {
+  "/": "<!doctype html><meta charset=utf-8><title>cudd-wasm</title>",
+  "/worker.mjs": `import createModule from "/build/wasm/spike.mjs";
+const m = await createModule();
+postMessage(m.UTF8ToString(m._spike_run()));`,
+};
+
+let server, base, browser, page;
+
+before(async () => {
+  server = createServer(async (req, res) => {
+    const path = new URL(req.url, "http://x").pathname;
+    const page = PAGES[path];
+    if (page !== undefined) {
+      res.writeHead(200, { "content-type": TYPES[extname(path) || ".html"] });
+      return res.end(page);
+    }
+    const file = normalize(join(root, path));
+    if (!file.startsWith(join(root, "build/wasm/"))) { res.writeHead(404); return res.end(); }
+    try {
+      const body = await readFile(file);
+      res.writeHead(200, { "content-type": TYPES[extname(file)] ?? "application/octet-stream" });
+      res.end(body);
+    } catch {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  base = `http://127.0.0.1:${server.address().port}`;
+  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
+  page = await browser.newPage();
+  await page.goto(`${base}/`);
+});
+
+after(async () => {
+  await browser?.close();
+  server?.close();
+});
+
+const native = () => JSON.parse(execFileSync(`${root}build/native/spike`, { encoding: "utf8" }));
+
+test("Chromium, main thread: the Phase 0 harness gives native CUDD's results", async () => {
+  const json = await page.evaluate(async () => {
+    const { default: createModule } = await import("/build/wasm/spike.mjs");
+    const m = await createModule();
+    return m.UTF8ToString(m._spike_run());
+  });
+  const r = JSON.parse(json);
+  assert.equal(r.platform, "wasm");
+  assert.equal(r.results.queens.minterms, 92);
+  assert.equal(r.deterministic, 1, r.nondeterministic);
+  assert.deepEqual(r.results, native().results);
+});
+
+test("Chromium, Web Worker: the Phase 0 harness gives native CUDD's results", async () => {
+  const json = await page.evaluate(() => new Promise((resolve, reject) => {
+    const w = new Worker("/worker.mjs", { type: "module" });
+    w.onmessage = (e) => { resolve(e.data); w.terminate(); };
+    w.onerror = (e) => { reject(new Error(e.message)); w.terminate(); };
+  }));
+  const r = JSON.parse(json);
+  assert.equal(r.platform, "wasm");
+  assert.equal(r.results.queens.minterms, 92);
+  assert.equal(r.deterministic, 1, r.nondeterministic);
+  assert.deepEqual(r.results, native().results);
+});
