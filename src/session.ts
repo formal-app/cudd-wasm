@@ -2,17 +2,10 @@
 // compiled to WebAssembly (specification §4.1). Used by the browser worker and
 // by the server's grader.
 import createModule, { type CuddModule } from './cudd.mjs';
+import { BudgetError } from './errors.js';
 import type { Ast, Graph, Limits, ReorderMethod, Stats, View } from './types.js';
 
-/** An operation exceeded one of the session's budgets. The session continues. */
-export class BudgetError extends Error {
-  readonly kind: 'time' | 'nodes' | 'memory';
-  constructor(kind: 'time' | 'nodes' | 'memory', message?: string) {
-    super(message ?? `exceeded the ${kind} budget`);
-    this.name = 'BudgetError';
-    this.kind = kind;
-  }
-}
+export { BudgetError };
 
 /**
  * The most variables a session may have (LIB-5; CW_MAX_VARS in src/glue.h).

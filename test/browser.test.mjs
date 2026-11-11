@@ -78,7 +78,8 @@ before(async () => {
       return res.end(page);
     }
     const file = normalize(join(root, path));
-    if (![join(root, "build/wasm/"), join(root, "dist/")].some((dir) => file.startsWith(dir))) {
+    const allowed = [join(root, "build/wasm/"), join(root, "dist/")];
+    if (!allowed.some((dir) => file.startsWith(dir))) {
       res.writeHead(404);
       return res.end();
     }
@@ -166,5 +167,92 @@ test("Chromium, Web Worker: every Session operation works on 1,000-level diagram
   assert.equal(r.implies, true);
   assert.ok(r.cudd >= 1000 && r.textbookGraph >= 1000);
   assert.equal(r.dot, true);
+  assert.equal(r.leaks, 0);
+});
+
+// ── WorkerSession (LIB-8) ───────────────────────────────────────────────────
+
+test("WorkerSession mirrors Session, and errors keep their class across the worker boundary (LIB-8)", async () => {
+  const r = await page.evaluate(async () => {
+    const { WorkerSession, BudgetError } = await import("/dist/client.js");
+    const v = (name) => ({ op: "var", name });
+    const out = {};
+    const ws = await WorkerSession.create({ vars: ["a", "b", "c"] });
+    out.define = await ws.define("f", { op: "and", args: [v("a"), v("b")] });
+    out.count = await ws.count("f");
+    out.cube = await ws.pickCube("f");
+    out.typeError = await ws.define("g", v("z")).catch((e) => e instanceof TypeError);
+    out.rangeError = await ws.setOrder(["a"]).catch((e) => e instanceof RangeError);
+    out.stillWorks = await ws.size("f");
+    out.leaks = await ws.dispose();
+    out.afterDispose = await ws.names().catch((e) => e.message);
+
+    // CUDD checks maxNodes when it allocates a block of 1,022 nodes, so the
+    // function must need several blocks: 12 pairs give 8,191 nodes.
+    const xs = Array.from({ length: 12 }, (_, i) => "x" + i), ys = xs.map((x) => x.replace("x", "y"));
+    const limited = await WorkerSession.create({ vars: [...xs, ...ys], limits: { maxNodes: 1000 } });
+    const xy = { op: "or", args: xs.map((x, i) => ({ op: "and", args: [v(x), v(ys[i])] })) };
+    out.budget = await limited.define("xy", xy).catch((e) => e instanceof BudgetError && e.kind);
+    out.afterBudget = await limited.define("small", { op: "and", args: [v("x0"), v("y0")] });
+    out.limitedLeaks = await limited.dispose();
+    out.badCreate = await WorkerSession.create({ vars: ["a", "a"] }).catch((e) => e instanceof RangeError);
+    return out;
+  });
+  assert.deepEqual(r.define, { size: 3 });
+  assert.equal(r.count, 2);
+  assert.deepEqual(r.cube, { a: 1, b: 1, c: 0 });
+  assert.equal(r.typeError, true);
+  assert.equal(r.rangeError, true);
+  assert.equal(r.stillWorks, 3);
+  assert.equal(r.leaks, 0);
+  assert.match(r.afterDispose, /disposed/);
+  assert.equal(r.budget, "nodes");
+  assert.deepEqual(r.afterBudget, { size: 3 });
+  assert.equal(r.limitedLeaks, 0);
+  assert.equal(r.badCreate, true);
+});
+
+test("a call past hardTimeoutMs ends the worker with BudgetError('time'); restart() restores variables and order (LIB-8)", async () => {
+  const r = await page.evaluate(async () => {
+    const { WorkerSession, BudgetError } = await import("/dist/client.js");
+    const v = (name) => ({ op: "var", name });
+    const n = 22;
+    const xs = Array.from({ length: n }, (_, i) => "x" + i), ys = xs.map((x) => x.replace("x", "y"));
+    const vars = [...xs, ...ys];
+    const xy = (k) => ({ op: "or", args: xs.slice(0, k).map((x, i) => ({ op: "and", args: [v(x), v(ys[i])] })) });
+    const out = {};
+    const ws = await WorkerSession.create({ vars, hardTimeoutMs: 300 });
+    const custom = [...vars].reverse();
+    await ws.setOrder(custom);
+
+    // 2^23 nodes take seconds; the hard timeout ends the worker at 300 ms.
+    const t0 = performance.now();
+    out.timeout = await ws.define("big", xy(n)).then(() => "completed", (e) => e instanceof BudgetError && e.kind);
+    out.ms = performance.now() - t0;
+    out.status = ws.status;
+    out.whileStopped = await ws.names().catch((e) => e.message);
+
+    await ws.restart();
+    out.restarted = ws.status;
+    out.names = await ws.names();
+    out.orderRestored = JSON.stringify(await ws.order()) === JSON.stringify(custom);
+    out.small = await ws.define("small", xy(3));
+
+    // An order that came from reorder() is restored too.
+    const sifted = (await ws.reorder("sift")).order;
+    await ws.restart();
+    out.siftedRestored = JSON.stringify(await ws.order()) === JSON.stringify(sifted);
+    out.leaks = await ws.dispose();
+    return out;
+  });
+  assert.equal(r.timeout, "time");
+  assert.ok(r.ms < 2000, `the call was stopped soon after the hard timeout (${Math.round(r.ms)} ms)`);
+  assert.equal(r.status, "stopped");
+  assert.match(r.whileStopped, /restart/);
+  assert.equal(r.restarted, "ready");
+  assert.deepEqual(r.names, [], "definitions are not restored; the caller re-applies them");
+  assert.equal(r.orderRestored, true);
+  assert.deepEqual(r.small, { size: 15 }, "3 pairs in the restored separated order: 2^4 - 1 nodes");
+  assert.equal(r.siftedRestored, true);
   assert.equal(r.leaks, 0);
 });
