@@ -6,7 +6,7 @@
 #   ./build.sh native   native library (autotools, out of tree) and test programs
 #   ./build.sh wasm     WebAssembly library (emcc, no autotools) and test programs
 #
-# Output: build/native/spike, build/wasm/spike.mjs and build/wasm/spike.wasm
+# Output: build/native/{spike,hardening}, build/wasm/{spike,hardening}.{mjs,wasm}
 set -euo pipefail
 cd "$(dirname "$0")"
 target="${1:-all}"
@@ -39,7 +39,8 @@ build_native() {
   local cc=(gcc -O3 -Wall -Wextra -I build/native -I cudd/cudd -I cudd/mtr -I cudd/st -I cudd/epd -I cudd/util -I src)
   local lib=build/native/cudd/.libs/libcudd.a
   "${cc[@]}" src/spike.c "$lib" -lm -o build/native/spike
-  echo "native: build/native/spike"
+  "${cc[@]}" test/hardening.c src/glue.c "$lib" -lm -o build/native/hardening
+  echo "native: build/native/spike, build/native/hardening"
 }
 
 # Link flags shared by every WebAssembly program.
@@ -62,9 +63,15 @@ _Static_assert(sizeof(long double) == SIZEOF_LONG_DOUBLE, "SIZEOF_LONG_DOUBLE");
 EOF
   emcc -I src -c "$out/sizes.c" -o "$out/obj/sizes.o"
 
-  # The library. Each compile is waited on, so a failure stops the build.
-  local objs=() pids=()
+  # The library: CUDD's sources, with src/shim.c in place of util/cpu_time.c
+  # (LIB-2), plus the C glue. Each compile is waited on, so a failure stops
+  # the build.
+  local lib_srcs=() objs=() pids=()
   for f in "${SRCS[@]}"; do
+    [ "$f" = cudd/util/cpu_time.c ] || lib_srcs+=("$f")
+  done
+  lib_srcs+=(src/shim.c src/glue.c)
+  for f in "${lib_srcs[@]}"; do
     local o="$out/obj/$(basename "$(dirname "$f")")_$(basename "${f%.c}").o"
     objs+=("$o")
     emcc -O3 "${INC[@]}" -c "$f" -o "$o" &
@@ -77,7 +84,9 @@ EOF
 
   emcc "${WASM_LINK[@]}" "${INC[@]}" src/spike.c "$out/libcudd.a" -o "$out/spike.mjs" \
     -sEXPORTED_FUNCTIONS=_spike_run -sEXPORTED_RUNTIME_METHODS=UTF8ToString
-  echo "wasm: $out/spike.mjs, $out/spike.wasm"
+  emcc "${WASM_LINK[@]}" "${INC[@]}" test/hardening.c "$out/libcudd.a" -o "$out/hardening.mjs" \
+    -sEXPORTED_FUNCTIONS=_hardening_run -sEXPORTED_RUNTIME_METHODS=ccall
+  echo "wasm: $out/spike.mjs, $out/hardening.mjs"
 }
 
 case "$target" in
