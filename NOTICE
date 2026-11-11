@@ -1,0 +1,47 @@
+cudd-wasm
+Copyright (c) 2026, David Kebo Houngninou
+Licensed under the BSD 3-Clause License; see LICENSE.
+
+This repository and its builds include the following third-party software,
+each under its own licence.
+
+------------------------------------------------------------------------------
+CUDD 3.0.0, in the cudd/ directory, unmodified
+
+Copyright (c) 1995-2004, Regents of the University of Colorado.
+All rights reserved.
+
+Licensed under the BSD 3-Clause License. The full text is in cudd/LICENSE.
+
+------------------------------------------------------------------------------
+The WebAssembly build (the .wasm and .mjs files) also contains code from the
+Emscripten runtime and from musl libc, both under the MIT License.
+
+Emscripten (runtime and JavaScript support code). Emscripten is available
+under the MIT License or the University of Illinois/NCSA Open Source License;
+it is used here under the MIT License.
+Copyright (c) 2010-2014 Emscripten authors, see the AUTHORS file in the
+Emscripten repository.
+
+musl libc
+Copyright © 2005-2020 Rich Felker, et al.
+
+Both are distributed under these terms:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
