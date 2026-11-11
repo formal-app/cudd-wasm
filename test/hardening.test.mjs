@@ -47,3 +47,20 @@ for (const [platform, run] of Object.entries(PLATFORMS)) {
     assert.equal(r.zeroRef, 0);
   });
 }
+
+test("wasm: memory grows to a 1 GB ceiling (LIB-3)", async () => {
+  assert.equal((await wasm("limits")).heapMaxMB, 1024);
+});
+
+test("wasm, 64 MB build: running out of memory returns NULL with CUDD_MEMORY_OUT, and the manager stays usable (LIB-3)", async () => {
+  assert.equal((await wasmFrom("hardening-64mb.mjs", "limits")).heapMaxMB, 64);
+  const r = await wasmFrom("hardening-64mb.mjs", "oom");
+  assert.equal(r.managerOk, 1);
+  assert.equal(r.failedNull, 1, "the operation that exhausts memory returns NULL");
+  assert.equal(r.failedError, "CUDD_MEMORY_OUT");
+  assert.equal(r.freshOk, 1, "after clearing, the same manager computes again");
+  assert.equal(r.freshError, "CUDD_NO_ERROR");
+  assert.equal(r.freshSize, 31);
+  assert.equal(r.zeroRef, 0, "no reference leaks after running out of memory");
+  assert.equal(r.newManagerOk, 1, "a new manager works after Cudd_Quit");
+});

@@ -6,7 +6,7 @@
 #   ./build.sh native   native library (autotools, out of tree) and test programs
 #   ./build.sh wasm     WebAssembly library (emcc, no autotools) and test programs
 #
-# Output: build/native/{spike,hardening}, build/wasm/{spike,hardening}.{mjs,wasm}
+# Output: build/native/{spike,hardening}, build/wasm/{spike,hardening,hardening-64mb}.{mjs,wasm}
 set -euo pipefail
 cd "$(dirname "$0")"
 target="${1:-all}"
@@ -43,9 +43,12 @@ build_native() {
   echo "native: build/native/spike, build/native/hardening"
 }
 
-# Link flags shared by every WebAssembly program.
+# Link flags shared by every WebAssembly program. Memory grows up to a 1 GB
+# ceiling, and at the ceiling malloc returns NULL instead of aborting, so CUDD
+# reports CUDD_MEMORY_OUT (LIB-3).
 WASM_LINK=(-O3 -sMODULARIZE=1 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1
-  -sENVIRONMENT=web,worker,node -sFORCE_FILESYSTEM=1)
+  -sENVIRONMENT=web,worker,node -sFORCE_FILESYSTEM=1
+  -sMAXIMUM_MEMORY=1GB -sABORTING_MALLOC=0)
 
 build_wasm() {
   command -v emcc >/dev/null || { echo "emcc not found: run ./bootstrap.sh, then source ~/emsdk/emsdk_env.sh" >&2; exit 1; }
@@ -86,7 +89,10 @@ EOF
     -sEXPORTED_FUNCTIONS=_spike_run -sEXPORTED_RUNTIME_METHODS=UTF8ToString
   emcc "${WASM_LINK[@]}" "${INC[@]}" test/hardening.c "$out/libcudd.a" -o "$out/hardening.mjs" \
     -sEXPORTED_FUNCTIONS=_hardening_run -sEXPORTED_RUNTIME_METHODS=ccall
-  echo "wasm: $out/spike.mjs, $out/hardening.mjs"
+  # The same checks with a 64 MB ceiling, to reach out-of-memory quickly.
+  emcc "${WASM_LINK[@]}" -sMAXIMUM_MEMORY=64MB "${INC[@]}" test/hardening.c "$out/libcudd.a" \
+    -o "$out/hardening-64mb.mjs" -sEXPORTED_FUNCTIONS=_hardening_run -sEXPORTED_RUNTIME_METHODS=ccall
+  echo "wasm: $out/spike.mjs, $out/hardening.mjs, $out/hardening-64mb.mjs"
 }
 
 case "$target" in

@@ -7,6 +7,9 @@
  *            operation succeeds after clearing
  *   reorder  LIB-2: sifting under a 50 ms limit stops early, and every
  *            function is unchanged
+ *   oom      LIB-3: running out of memory returns NULL with CUDD_MEMORY_OUT,
+ *            and the manager stays usable (run in the 64 MB build)
+ *   limits   the WebAssembly heap ceiling and stack size this build has
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +19,8 @@
 #include "glue.h"
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
+#include <emscripten/stack.h>
 #endif
 
 static char out[4096];
@@ -170,11 +175,70 @@ static void scenario_reorder(void) {
     unchanged, zeroRef);
 }
 
+/* ── LIB-3: running out of memory is recoverable ─────────────────────────── */
+
+/* At 2^(OOM_PAIRS+1) nodes, this function needs far more than 64 MB. */
+#ifndef OOM_PAIRS
+#define OOM_PAIRS 24
+#endif
+
+static void scenario_oom(void) {
+  DdManager *dd = cw_manager_new(2 * OOM_PAIRS);
+  if (!dd) {
+    snprintf(out, sizeof out, "{\"scenario\":\"oom\",\"managerOk\":0}");
+    return;
+  }
+  DdNode *f = xy_sum(dd, 0, OOM_PAIRS);
+  int failedNull = f == NULL;
+  Cudd_ErrorType failedError = Cudd_ReadErrorCode(dd);
+  double memoryMB = Cudd_ReadMemoryInUse(dd) / 1048576.0;
+  long peakLive = Cudd_ReadPeakLiveNodeCount(dd);
+  if (f) Cudd_RecursiveDeref(dd, f);
+
+  /* After clearing, the same manager computes again. */
+  Cudd_ClearErrorCode(dd);
+  DdNode *g = xy_sum(dd, 0, 4);
+  int freshOk = g != NULL;
+  int freshSize = g ? Cudd_DagSize(g) : -1;
+  Cudd_ErrorType freshError = Cudd_ReadErrorCode(dd);
+  if (g) Cudd_RecursiveDeref(dd, g);
+  int zeroRef = Cudd_CheckZeroRef(dd);
+  Cudd_Quit(dd);
+
+  /* The memory is returned: a new manager works after Cudd_Quit. */
+  dd = cw_manager_new(8);
+  DdNode *h = dd ? xy_sum(dd, 0, 4) : NULL;
+  int newManagerOk = h != NULL && Cudd_DagSize(h) == 31;
+  if (h) Cudd_RecursiveDeref(dd, h);
+  if (dd) Cudd_Quit(dd);
+
+  snprintf(out, sizeof out,
+    "{\"scenario\":\"oom\",\"managerOk\":1,\"failedNull\":%d,\"failedError\":\"%s\","
+    "\"memoryMB\":%.1f,\"peakLive\":%ld,\"freshOk\":%d,\"freshSize\":%d,\"freshError\":\"%s\","
+    "\"zeroRef\":%d,\"newManagerOk\":%d}",
+    failedNull, cw_error_name(failedError), memoryMB, peakLive,
+    freshOk, freshSize, cw_error_name(freshError), zeroRef, newManagerOk);
+}
+
+/* ── The limits this build has ───────────────────────────────────────────── */
+
+static void scenario_limits(void) {
+#ifdef __EMSCRIPTEN__
+  double heapMaxMB = emscripten_get_heap_max() / 1048576.0;
+  double stackKB = (emscripten_stack_get_base() - emscripten_stack_get_end()) / 1024.0;
+#else
+  double heapMaxMB = 0, stackKB = 0;
+#endif
+  snprintf(out, sizeof out, "{\"scenario\":\"limits\",\"heapMaxMB\":%.1f,\"stackKB\":%.1f}", heapMaxMB, stackKB);
+}
+
 /* ── Entry points ────────────────────────────────────────────────────────── */
 
 static const struct { const char *name; void (*run)(void); } SCENARIOS[] = {
   {"time", scenario_time},
   {"reorder", scenario_reorder},
+  {"oom", scenario_oom},
+  {"limits", scenario_limits},
 };
 #define NSCENARIOS ((int) (sizeof SCENARIOS / sizeof SCENARIOS[0]))
 
