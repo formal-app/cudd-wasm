@@ -1,0 +1,33 @@
+# Build CUDD natively and to WebAssembly, then run every test: native and
+# WebAssembly in Node, and the WebAssembly build in headless Chromium.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Pinned: Playwright 1.59.1 cannot install Chromium's dependencies on 26.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install Emscripten 7.0.0
+        run: ./bootstrap.sh
+      - run: npm ci
+      # apt mirrors occasionally hang; fail fast instead of using up the job.
+      - name: Install Chromium
+        timeout-minutes: 10
+        run: npx playwright install --with-deps chromium
+      - name: Build
+        run: |
+          source ~/emsdk/emsdk_env.sh
+          ./build.sh
+      - name: Test
+        run: npm test
