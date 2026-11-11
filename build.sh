@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the Phase 0 spike: CUDD 3.0.0 from the vendored cudd/ sources, plus the
-# src/spike.c harness, natively and to WebAssembly. cudd/ is never modified.
+# Build CUDD 3.0.0 from the vendored cudd/ sources, natively and to
+# WebAssembly, with the programs that test it. cudd/ is never modified.
 #
 #   ./build.sh          both
-#   ./build.sh native   native library (autotools, out of tree) and harness
-#   ./build.sh wasm     WebAssembly library (emcc, no autotools) and harness
+#   ./build.sh native   native library (autotools, out of tree) and test programs
+#   ./build.sh wasm     WebAssembly library (emcc, no autotools) and test programs
 #
-# Output: build/native/spike, build/wasm/spike.mjs and build/wasm/spike.wasm.
+# Output: build/native/spike, build/wasm/spike.mjs and build/wasm/spike.wasm
 set -euo pipefail
 cd "$(dirname "$0")"
 target="${1:-all}"
@@ -25,19 +25,31 @@ done
 build_native() {
   mkdir -p build/native
   if [ ! -f build/native/cudd/.libs/libcudd.a ]; then
+    # A git checkout gives every file a new time, so make would see autotools'
+    # outputs as older than their inputs and try to regenerate them. Configure
+    # from a copy whose files all share one time; cudd/ itself is untouched.
+    rm -rf build/cudd-src
+    cp -R cudd build/cudd-src
+    find build/cudd-src -exec touch -h -d @1451606400 {} +
     # configure applies CUDD's default flags (-Wall -Wextra -g -O3) only when
     # CFLAGS is unset; an exported empty CFLAGS would build it unoptimised.
-    (cd build/native && env -u CFLAGS ../../cudd/configure && make -j"$(nproc)")
+    (cd build/native && env -u CFLAGS ../cudd-src/configure && make -j"$(nproc)")
   fi
-  # The harness against the native library; -I build/native for its config.h.
-  gcc -O3 -Wall -Wextra -I cudd/cudd -I cudd/mtr -I cudd/st -I cudd/epd -I cudd/util -I build/native \
-    src/spike.c build/native/cudd/.libs/libcudd.a -lm -o build/native/spike
+  # -I build/native comes first, so its config.h wins over src/config.h (wasm32).
+  local cc=(gcc -O3 -Wall -Wextra -I build/native -I cudd/cudd -I cudd/mtr -I cudd/st -I cudd/epd -I cudd/util -I src)
+  local lib=build/native/cudd/.libs/libcudd.a
+  "${cc[@]}" src/spike.c "$lib" -lm -o build/native/spike
   echo "native: build/native/spike"
 }
 
+# Link flags shared by every WebAssembly program.
+WASM_LINK=(-O3 -sMODULARIZE=1 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1
+  -sENVIRONMENT=web,worker,node -sFORCE_FILESYSTEM=1)
+
 build_wasm() {
-  command -v emcc >/dev/null || { echo "emcc not found: source ~/emsdk/emsdk_env.sh" >&2; exit 1; }
+  command -v emcc >/dev/null || { echo "emcc not found: run ./bootstrap.sh, then source ~/emsdk/emsdk_env.sh" >&2; exit 1; }
   local out=build/wasm
+  rm -rf "$out/obj"
   mkdir -p "$out/obj"
 
   # src/config.h must state wasm32's real type sizes.
@@ -50,20 +62,20 @@ _Static_assert(sizeof(long double) == SIZEOF_LONG_DOUBLE, "SIZEOF_LONG_DOUBLE");
 EOF
   emcc -I src -c "$out/sizes.c" -o "$out/obj/sizes.o"
 
-  local objs=() jobs=0
+  # The library. Each compile is waited on, so a failure stops the build.
+  local objs=() pids=()
   for f in "${SRCS[@]}"; do
     local o="$out/obj/$(basename "$(dirname "$f")")_$(basename "${f%.c}").o"
     objs+=("$o")
     emcc -O3 "${INC[@]}" -c "$f" -o "$o" &
-    if (( ++jobs >= $(nproc) )); then wait -n; jobs=$((jobs - 1)); fi
+    pids+=($!)
+    if (( ${#pids[@]} >= $(nproc) )); then for p in "${pids[@]}"; do wait "$p"; done; pids=(); fi
   done
-  wait
+  for p in "${pids[@]}"; do wait "$p"; done
+  rm -f "$out/libcudd.a"
+  emar rcs "$out/libcudd.a" "${objs[@]}"
 
-  local shim=()
-  [ -f src/shim.c ] && shim=(src/shim.c)
-  emcc -O3 "${INC[@]}" src/spike.c "${shim[@]}" "${objs[@]}" -o "$out/spike.mjs" \
-    -sMODULARIZE=1 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1 \
-    -sENVIRONMENT=web,worker,node -sFORCE_FILESYSTEM=1 \
+  emcc "${WASM_LINK[@]}" "${INC[@]}" src/spike.c "$out/libcudd.a" -o "$out/spike.mjs" \
     -sEXPORTED_FUNCTIONS=_spike_run -sEXPORTED_RUNTIME_METHODS=UTF8ToString
   echo "wasm: $out/spike.mjs, $out/spike.wasm"
 }
