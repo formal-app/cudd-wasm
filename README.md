@@ -4,10 +4,10 @@
 
 ## Install
 
-Version 0.1.0 is released on GitHub, not on npm:
+Version 0.1.1 is released on GitHub, not on npm:
 
 ```sh
-npm install https://github.com/formal-app/cudd-wasm/releases/download/v0.1.0/formal-app-cudd-wasm-0.1.0.tgz
+npm install https://github.com/formal-app/cudd-wasm/releases/download/v0.1.1/formal-app-cudd-wasm-0.1.1.tgz
 ```
 
 ## Use

@@ -1,6 +1,6 @@
 {
   "name": "@formal-app/cudd-wasm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "CUDD 3.0.0 compiled to WebAssembly",
   "license": "BSD-3-Clause",

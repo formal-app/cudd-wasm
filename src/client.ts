@@ -117,8 +117,13 @@ export class WorkerSession {
   // ── Internals ────────────────────────────────────────────────────────────
 
   private async start(): Promise<void> {
-    const url = this.options.workerUrl ?? new URL('./worker.js', import.meta.url);
-    const worker = new Worker(url, { type: 'module' });
+    // Bundlers (Vite, webpack) bundle a worker only when it is written exactly
+    // as new Worker(new URL('./worker.js', import.meta.url), ...). Computing the
+    // URL first hides it: Vite then inlined worker.js unbundled, as a data: URL
+    // whose imports cannot resolve. tests/client-bundling.test.mjs keeps it.
+    const worker = this.options.workerUrl
+      ? new Worker(this.options.workerUrl, { type: 'module' })
+      : new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     this.worker = worker;
     this.stopped = null;
     worker.onmessage = (e: MessageEvent<Reply>) => this.receive(e.data);
